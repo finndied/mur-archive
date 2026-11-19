@@ -334,8 +334,8 @@ export default function CatScene({ spinning, reset, onAvailability }) {
     };
   }, [onAvailability]);
 
-  if (failed) return <img className="studio-poster" src="/photos/basket.jpg" alt="Два кота свернулись вместе в серой лежанке" />;
-  return <canvas className="studio-model" ref={canvasRef} tabIndex={0} aria-label="Два кота в 3D. Используйте клавиши со стрелками, чтобы повернуть фигурки." />;
+  if (failed) return <img className="studio-poster" src="/photos/basket.jpg" alt="Джузо и Моти свернулись вместе в серой лежанке" />;
+  return <canvas className="studio-model" ref={canvasRef} tabIndex={0} aria-label="Джузо и Моти в 3D. Используйте клавиши со стрелками, чтобы повернуть фигурки." />;
 }
 
 

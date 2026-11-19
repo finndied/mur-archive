@@ -2,12 +2,13 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Cat, ChevronLeft, ChevronRight, Expand, Focus, Hand, Heart,
-  Images, PawPrint, RotateCcw, Shuffle, Sparkles, Stamp, X,
+  ImagePlus, Images, PawPrint, RotateCcw, Shuffle, Sparkles, Stamp, X,
 } from 'lucide-react';
 import '@fontsource-variable/manrope';
 import '@fontsource-variable/unbounded';
 import './styles.css';
 import Postcard from './Postcard.jsx';
+import { usePersonalPhotos } from './personalPhotos.js';
 
 const CatScene = lazy(() => import('./CatScene.jsx'));
 
@@ -18,23 +19,29 @@ const photos = [
   { id: 'basket', title: 'Места хватит обоим', kind: 'duo', focus: '50% 51%', alt: 'Джузо и Моти свернулись вместе в серой лежанке' },
   { id: 'sofa', title: 'Диванные дела', kind: 'duo', focus: '50% 77%', alt: 'Джузо лежит на подлокотнике, а Моти сидит рядом на диване' },
   { id: 'ride', title: 'Карманный попутчик', kind: 'solo', focus: '50% 72%', alt: 'Маленький светлый котёнок устроился на пледе в машине' },
-];
+].map((photo) => ({ ...photo, src: `/photos/${photo.id}.jpg`, width: 720, height: 1280 }));
 
 const filters = [
   { id: 'all', label: 'Все' },
   { id: 'duo', label: 'Вместе' },
   { id: 'solo', label: 'По одному' },
+  { id: 'custom', label: 'Мои фото' },
 ];
-const photoUrl = (id) => `/photos/${id}.jpg`;
 const favoriteKey = 'mur-archive:favorites';
+const postcardKey = 'mur-archive:postcard-photo';
 
 function readFavorites() {
   try {
     const value = JSON.parse(localStorage.getItem(favoriteKey));
-    return Array.isArray(value) ? value.filter((id) => photos.some((photo) => photo.id === id)) : [];
+    return Array.isArray(value) ? [...new Set(value.filter((id) => typeof id === 'string'))] : [];
   } catch {
     return [];
   }
+}
+
+function readPostcardPhoto() {
+  try { return localStorage.getItem(postcardKey) || photos[0].id; }
+  catch { return photos[0].id; }
 }
 
 function FavoriteButton({ photo, favorites, onToggle }) {
@@ -97,7 +104,7 @@ function Lightbox({ list, active, favorites, onChange, onClose, onToggle, onPost
       <div className="lightbox-inner">
         <button type="button" className="lightbox-close" onClick={onClose} aria-label="Закрыть фото"><X /></button>
         <div className="lightbox-image" data-swipe={list.length > 1} onPointerDown={startSwipe} onPointerUp={finishSwipe} onLostPointerCapture={() => { swipe.current = null; }}>
-          <img src={photoUrl(photo.id)} alt={photo.alt} draggable={false} />
+          <img src={photo.src} alt={photo.alt} draggable={false} />
         </div>
         <div className="lightbox-bar">
           <button type="button" className="lightbox-nav" onClick={() => step(-1)} disabled={list.length < 2} aria-label="Предыдущее фото"><ChevronLeft /></button>
@@ -129,10 +136,10 @@ function Hero({ onBrowse, onOpen }) {
       <div className="hero-art">
         <div className="hero-halo" aria-hidden="true" />
         <div className="hero-orbit" aria-hidden="true" />
-        <div className="hero-snapshot" aria-hidden="true"><img src={photoUrl('yawn')} alt="" /></div>
+        <div className="hero-snapshot" aria-hidden="true"><img src={photos[1].src} alt="" /></div>
         <figure className="hero-photo">
           <button type="button" className="hero-photo-open" aria-label="Открыть фото с обложки" onClick={onOpen}>
-            <img src={photoUrl('window')} alt={photos[0].alt} fetchPriority="high" />
+            <img src={photos[0].src} alt={photos[0].alt} fetchPriority="high" />
             <span className="expand" aria-hidden="true"><Expand size={17} /></span>
           </button>
         </figure>
@@ -147,7 +154,7 @@ function Hero({ onBrowse, onOpen }) {
 }
 
 function StudioFallback() {
-  return <img className="studio-poster" src={photoUrl('basket')} alt={photos[3].alt} loading="lazy" />;
+  return <img className="studio-poster" src={photos[3].src} alt={photos[3].alt} loading="lazy" />;
 }
 
 function Studio() {
@@ -198,15 +205,24 @@ function App() {
   const [filter, setFilter] = useState('all');
   const [active, setActive] = useState(null);
   const [viewerList, setViewerList] = useState([]);
-  const [postcardPhoto, setPostcardPhoto] = useState(photos[0].id);
+  const [postcardPhoto, setPostcardPhoto] = useState(readPostcardPhoto);
+  const { personalPhotos, loading, importing, notice, addPhotos } = usePersonalPhotos();
   const opener = useRef(null);
   const lastViewed = useRef(null);
+  const filePicker = useRef(null);
 
-  const visible = photos.filter((photo) => filter === 'all' || photo.kind === filter || (filter === 'favorites' && favorites.includes(photo.id)));
+  const allPhotos = [...photos, ...personalPhotos];
+  const visible = allPhotos.filter((photo) => filter === 'all' || photo.kind === filter || (filter === 'favorites' && favorites.includes(photo.id)));
+  const favoriteCount = allPhotos.filter((photo) => favorites.includes(photo.id)).length;
+  const postcardSelection = allPhotos.find(({ id }) => id === postcardPhoto) ?? photos[0];
 
   useEffect(() => {
     try { localStorage.setItem(favoriteKey, JSON.stringify(favorites)); } catch { /* The gallery works without storage. */ }
   }, [favorites]);
+
+  useEffect(() => {
+    try { localStorage.setItem(postcardKey, postcardPhoto); } catch { /* The editor can still use the current selection. */ }
+  }, [postcardPhoto]);
 
   useEffect(() => {
     document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: 'instant' });
@@ -232,6 +248,12 @@ function App() {
     const candidates = alternatives.length ? alternatives : visible;
     const selected = candidates[Math.floor(Math.random() * candidates.length)];
     if (selected) openPhoto(selected.id, event);
+  }
+
+  async function importPhotos(event) {
+    const files = Array.from(event.currentTarget.files);
+    event.currentTarget.value = '';
+    if (await addPhotos(files)) setFilter('custom');
   }
 
   function closePhoto() {
@@ -261,31 +283,34 @@ function App() {
           <a className="postcard-nav" href="#postcard">Мур.почта</a>
           <a className="studio-link" href="#studio" aria-label="3D-мастерская"><span className="studio-link-full">3D-мастерская</span><span className="studio-link-short" aria-hidden="true">3D</span></a>
         </nav>
-        <a className="favorites-link" id="favorites-link" href="#gallery" onClick={() => setFilter(filter === 'favorites' ? 'all' : 'favorites')} aria-current={filter === 'favorites' ? 'true' : undefined} aria-label={`Избранное, фото: ${favorites.length}`}>
-          <Heart size={19} fill={filter === 'favorites' ? 'currentColor' : 'none'} /><span>Избранное</span>{favorites.length > 0 && <b>{favorites.length}</b>}
+        <a className="favorites-link" id="favorites-link" href="#gallery" onClick={() => setFilter(filter === 'favorites' ? 'all' : 'favorites')} aria-current={filter === 'favorites' ? 'true' : undefined} aria-label={`Избранное, фото: ${favoriteCount}`}>
+          <Heart size={19} fill={filter === 'favorites' ? 'currentColor' : 'none'} /><span>Избранное</span>{favoriteCount > 0 && <b>{favoriteCount}</b>}
         </a>
       </header>
       <main>
-        <Hero onBrowse={() => setFilter('all')} onOpen={(event) => openPhoto(photos[0].id, event, photos)} />
+        <Hero onBrowse={() => setFilter('all')} onOpen={(event) => openPhoto(photos[0].id, event, allPhotos)} />
         <section className="gallery shell" id="gallery" aria-labelledby="gallery-title">
           <div className="gallery-head">
             <div>
               <div className="section-kicker"><Images size={17} /> Фотографии</div>
-              <h2 id="gallery-title">{filter === 'favorites' ? 'Избранные кадры' : 'Кадры из дома'}<span>.</span></h2>
+              <h2 id="gallery-title">{filter === 'favorites' ? 'Избранные кадры' : filter === 'custom' ? 'Мои фотографии' : 'Кадры из дома'}<span>.</span></h2>
             </div>
             <div className="gallery-actions">
               <div className="filters" role="group" aria-label="Фильтр фотографий">
                 {filters.map(({ id, label }) => <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
               </div>
               <button type="button" className="random-photo" onClick={openRandomPhoto} disabled={!visible.length}><Shuffle size={16} /> Случайный кадр</button>
+              <button type="button" className="upload-photo" onClick={() => filePicker.current.click()} disabled={loading || importing}><ImagePlus size={17} /> {importing ? 'Сохраняем…' : 'Добавить фото'}</button>
+              <input ref={filePicker} type="file" accept="image/*" multiple hidden onChange={importPhotos} />
             </div>
           </div>
+          <div className="upload-status" role="status">{notice}</div>
           {visible.length ? <div className="gallery-grid">
             {visible.map((photo) => (
               <article className="photo-card" key={photo.id}>
                 <div className="photo-media">
                   <button type="button" className="photo-open" onClick={(event) => openPhoto(photo.id, event)} aria-label={`Открыть фото — ${photo.title}`}>
-                    <img src={photoUrl(photo.id)} alt={photo.alt} style={{ objectPosition: photo.focus }} loading="lazy" width="720" height="1280" />
+                    <img src={photo.src} alt={photo.alt} style={{ objectPosition: photo.focus }} loading="lazy" width={photo.width} height={photo.height} />
                     <span className="expand" aria-hidden="true"><Expand size={17} /></span>
                   </button>
                   <FavoriteButton photo={photo} favorites={favorites} onToggle={toggleFavorite} />
@@ -293,9 +318,10 @@ function App() {
                 <h3>{photo.title}</h3>
               </article>
             ))}
-          </div> : <div className="empty"><Heart size={25} /><p>Нажмите сердечко на фото, чтобы сохранить его здесь.</p><button type="button" onClick={() => setFilter('all')}>Все фотографии</button></div>}
+          </div> : filter === 'custom' ? <div className="empty"><ImagePlus size={25} /><p>{loading ? 'Открываем сохранённые фото…' : 'Добавьте свои снимки, чтобы использовать их в фотобудке.'}</p></div>
+            : <div className="empty"><Heart size={25} /><p>Нажмите сердечко на фото, чтобы сохранить его здесь.</p><button type="button" onClick={() => setFilter('all')}>Все фотографии</button></div>}
         </section>
-        <Postcard photos={photos} photo={photos.find(({ id }) => id === postcardPhoto)} onSelect={setPostcardPhoto} photoUrl={photoUrl} />
+        <Postcard photos={allPhotos} photo={postcardSelection} onSelect={setPostcardPhoto} />
         <Studio />
       </main>
       <footer className="site-footer shell">

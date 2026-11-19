@@ -145,7 +145,7 @@ function drawPostcard(canvas, { image, focus, theme, seal, caption }) {
   ctx.fillText('ИЗ МУР.АРХИВА', 85, 1281);
 }
 
-export default function Postcard({ photos, photo, onSelect, photoUrl }) {
+export default function Postcard({ photos, photo, onSelect }) {
   const [theme, setTheme] = useState(themes[0]);
   const [seal, setSeal] = useState('paw');
   const [caption, setCaption] = useState('Привет от Джузо и Моти!');
@@ -154,15 +154,16 @@ export default function Postcard({ photos, photo, onSelect, photoUrl }) {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const canvas = useRef(null);
+  const film = useRef(null);
   const image = loaded?.id === photo.id ? loaded.image : null;
 
   useEffect(() => {
     const picture = new Image();
     picture.onload = () => setLoaded({ id: photo.id, image: picture });
     picture.onerror = () => setLoaded({ id: photo.id, image: null });
-    picture.src = photoUrl(photo.id);
+    picture.src = photo.src;
     return () => { picture.onload = null; picture.onerror = null; };
-  }, [photo.id, photoUrl]);
+  }, [photo.id, photo.src]);
 
   useEffect(() => {
     let current = true;
@@ -176,6 +177,15 @@ export default function Postcard({ photos, photo, onSelect, photoUrl }) {
   }, [image, photo.focus, theme, seal, caption, fontReady]);
 
   useEffect(() => { setFeedback(''); }, [photo.id, theme, seal, caption]);
+
+  useEffect(() => {
+    const strip = film.current;
+    const selected = strip.querySelector('[aria-pressed="true"]');
+    const bounds = strip.getBoundingClientRect();
+    const item = selected.getBoundingClientRect();
+    if (item.right > bounds.right) strip.scrollLeft += item.right - bounds.right + 3;
+    if (item.left < bounds.left) strip.scrollLeft -= bounds.left - item.left + 3;
+  }, [photo.id, photos.length]);
 
   function download() {
     if (!image || saving) return;
@@ -217,10 +227,10 @@ export default function Postcard({ photos, photo, onSelect, photoUrl }) {
       <div className="postcard-editor">
         <fieldset className="postcard-field">
           <legend>Кадр</legend>
-          <div className="postcard-film">
+          <div className="postcard-film" ref={film}>
             {photos.map((item) => (
               <button type="button" key={item.id} aria-label={item.title} aria-pressed={photo.id === item.id} onClick={() => onSelect(item.id)}>
-                <img src={photoUrl(item.id)} alt="" width="72" height="72" loading="lazy" style={{ objectPosition: item.focus }} />
+                <img src={item.src} alt="" width="72" height="72" loading="lazy" style={{ objectPosition: item.focus }} />
               </button>
             ))}
           </div>

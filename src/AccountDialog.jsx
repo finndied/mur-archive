@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CloudUpload, KeyRound, LogIn, LogOut, Mail, UserRound, X } from 'lucide-react';
+import { CloudUpload, KeyRound, LogIn, LogOut, UserRound, X } from 'lucide-react';
 import { normalizeUsername, PASSWORD_MIN, USERNAME_PATTERN, validPassword } from './accountCredentials.js';
 import './account.css';
 
@@ -8,8 +8,8 @@ const errors = {
   invalid_credentials: 'Проверь логин и пароль.',
   weak_password: 'Выбери более надёжный пароль.',
   rate_limit: 'Слишком много попыток. Попробуй чуть позже.',
-  reauth_required: 'Для привязки снова войди через «Вход по ссылке», затем повтори этот шаг.',
-  session_required: 'Снова войди в аккаунт, чтобы добавить логин.',
+  reauth_required: 'Эта сессия устарела. Обратись к владельцу сайта, чтобы сохранить доступ к аккаунту.',
+  session_required: 'Сессия недоступна. Обратись к владельцу сайта для привязки логина.',
   already_linked: 'К этому аккаунту уже привязан логин. Переоткрой окно аккаунта.',
   unavailable: 'Вход временно недоступен. Попробуй ещё раз позже.',
 };
@@ -27,20 +27,18 @@ async function requestAccount(action, username, password, accessToken) {
   return result;
 }
 
-export default function AccountDialog({ client, user, initialNotice, onClose, onImport, onSignOut, uploadBusy }) {
+export default function AccountDialog({ client, user, onClose, onImport, onSignOut, uploadBusy }) {
   const dialog = useRef(null);
-  const [mode, setMode] = useState(user ? 'profile' : initialNotice ? 'email' : 'login');
+  const [mode, setMode] = useState(user ? 'profile' : 'login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState('');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState(initialNotice || '');
+  const [notice, setNotice] = useState('');
   const accountName = user?.app_metadata?.mur_username;
   const creating = mode === 'signup';
   const linking = mode === 'link';
   const title = linking ? 'Добавить логин и пароль' : user ? 'Твой аккаунт'
-    : creating ? 'Создать аккаунт' : mode === 'email' ? 'Вход по ссылке' : 'Вход в аккаунт';
+    : creating ? 'Создать аккаунт' : 'Вход в аккаунт';
 
   useEffect(() => {
     const node = dialog.current;
@@ -51,30 +49,7 @@ export default function AccountDialog({ client, user, initialNotice, onClose, on
   function switchMode(next) {
     setMode(next);
     setPassword('');
-    setSent('');
     setNotice('');
-  }
-
-  async function sendLink(event) {
-    event.preventDefault();
-    if (!client || busy) return;
-    const address = email.trim();
-    setBusy(true);
-    setNotice('');
-    try {
-      const { error } = await client.auth.signInWithOtp({
-        email: address,
-        options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + window.location.pathname },
-      });
-      if (error && !['otp_disabled', 'user_not_found'].includes(error.code)) throw error;
-      setSent(address);
-    } catch (error) {
-      setNotice(error.status === 429
-        ? 'Подождите минуту перед повторной отправкой.'
-        : 'Не удалось отправить письмо. Проверьте адрес и попробуйте ещё раз.');
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function submitPassword(event) {
@@ -162,25 +137,7 @@ export default function AccountDialog({ client, user, initialNotice, onClose, on
           </div>
           <p className="account-note">Перенос копирует данные из этого браузера в аккаунт.</p>
         </> : !client ? <p>Вход станет доступен после подключения облачного хранилища к сайту.</p>
-          : mode === 'email' ? <>
-            {sent ? <>
-              <p>Если у тебя есть аккаунт на <strong>{sent}</strong>, письмо со ссылкой придёт на эту почту. Открой ссылку в том же браузере.</p>
-              <button type="button" className="account-secondary" onClick={() => setSent('')}>Указать другой адрес</button>
-            </> : <>
-              <p>Этот способ подойдёт, если ты уже создавал аккаунт по почте.</p>
-              <form className="account-form" onSubmit={sendLink}>
-                <label htmlFor="account-email">Электронная почта</label>
-                <input id="account-email" type="email" autoComplete="email" placeholder="name@example.com"
-                  required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} />
-                <button type="submit" className="account-primary" disabled={busy}>
-                  <Mail size={18} /> {busy ? 'Отправляем…' : 'Получить ссылку'}
-                </button>
-              </form>
-            </>}
-            <div className="account-switches">
-              <button type="button" disabled={busy} onClick={() => switchMode('login')}>Войти по логину</button>
-            </div>
-          </> : <>
+          : <>
             <p>{linking ? 'Добавь данные для входа. Фото и избранное останутся в этом аккаунте.'
               : creating ? 'Придумай логин и пароль, чтобы открывать свой альбом на разных устройствах.'
                 : 'Введи логин и пароль от своего аккаунта.'}</p>
@@ -200,12 +157,9 @@ export default function AccountDialog({ client, user, initialNotice, onClose, on
             </form>
             <div className="account-switches">
               {linking ? <button type="button" disabled={busy} onClick={() => switchMode('profile')}>К аккаунту</button>
-                : <>
-                  <button type="button" disabled={busy} onClick={() => switchMode(creating ? 'login' : 'signup')}>
-                    {creating ? 'Уже есть аккаунт' : 'Создать аккаунт'}
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => switchMode('email')}>Раньше входил по ссылке</button>
-                </>}
+                : <button type="button" disabled={busy} onClick={() => switchMode(creating ? 'login' : 'signup')}>
+                  {creating ? 'Уже есть аккаунт' : 'Создать аккаунт'}
+                </button>}
             </div>
           </>}
         <p className="account-notice" role="status">{notice}</p>

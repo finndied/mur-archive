@@ -187,7 +187,7 @@ function Studio() {
   );
 }
 
-function Archive({ user, authError }) {
+function Archive({ user }) {
   const userId = user?.id;
   const cloud = useMemo(() => userId ? createPhotoStore(supabase, userId) : null, [userId]);
   const gallery = usePersonalPhotos(cloud);
@@ -197,7 +197,7 @@ function Archive({ user, authError }) {
   const [filter, setFilter] = useState('all');
   const [active, setActive] = useState(null);
   const [viewerList, setViewerList] = useState([]);
-  const [accountOpen, setAccountOpen] = useState(Boolean(authError));
+  const [accountOpen, setAccountOpen] = useState(false);
   const opener = useRef(null);
   const lastViewed = useRef(null);
   const filePicker = useRef(null);
@@ -340,7 +340,7 @@ function Archive({ user, authError }) {
         <a className="back-top" href="#top">Наверх</a>
       </footer>
       {active && <Lightbox list={currentViewer} active={active} favorites={favorites} favoritesReady={favoritesReady} onChange={showPhoto} onClose={closePhoto} onToggle={toggleFavorite} onPostcard={makePostcard} />}
-      {accountOpen && <AccountDialog client={supabase} user={user} initialNotice={authError} onClose={() => setAccountOpen(false)} onImport={importFromBrowser} onSignOut={signOut} uploadBusy={importing} />}
+      {accountOpen && <AccountDialog client={supabase} user={user} onClose={() => setAccountOpen(false)} onImport={importFromBrowser} onSignOut={signOut} uploadBusy={importing} />}
     </>
   );
 }
@@ -348,33 +348,18 @@ function Archive({ user, authError }) {
 function App() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(!supabase);
-  const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     if (!supabase) return;
-    const callback = new URL(window.location.href);
-    const hash = new URLSearchParams(callback.hash.slice(1));
-    if (callback.searchParams.has('error_code') || hash.has('error_code')) {
-      setAuthError('Ссылка для входа недействительна или устарела. Запроси новую.');
-      for (const key of ['error', 'error_code', 'error_description']) callback.searchParams.delete(key);
-      if (hash.has('error_code')) callback.hash = '';
-      window.history.replaceState(window.history.state, '', callback);
-    }
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, current) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => {
       setSession(current);
-      if (current) setAuthError('');
-      if (event === 'INITIAL_SESSION' && !current && callback.searchParams.has('code')) {
-        setAuthError('Открой ссылку в браузере, где ты её запросил. Если срок истёк, запроси новую.');
-        callback.searchParams.delete('code');
-        window.history.replaceState(window.history.state, '', callback);
-      }
       setReady(true);
     });
     return () => subscription.unsubscribe();
   }, []);
 
   if (!ready) return <p className="shell account-loading" role="status">Открываем Мур.архив…</p>;
-  return <Archive key={session?.user.id ?? 'guest'} user={session?.user} authError={authError} />;
+  return <Archive key={session?.user.id ?? 'guest'} user={session?.user} />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

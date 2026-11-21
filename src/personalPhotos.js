@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { watchAccountChanges } from './accountRefresh.js';
 
 const databaseName = 'mur-archive-photos';
 const storeName = 'photos';
@@ -61,47 +62,83 @@ async function preparePhoto(file) {
   }
 }
 
-export function usePersonalPhotos() {
+export function readLocalPhotos() {
+  return photoTransaction('readonly', (store) => store.getAll());
+}
+
+function newestFirst(photos) {
+  return photos.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+}
+
+export function usePersonalPhotos(cloud) {
   const [personalPhotos, setPersonalPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState('');
-  const current = useRef(false);
-  const objectUrls = useRef(new Set());
+  const [loadError, setLoadError] = useState('');
+  const mounted = useRef(false);
+  const working = useRef(false);
+  const activeLoad = useRef(0);
+  const objectUrls = useRef(new Map());
 
-  function createView({ blob, ...photo }) {
-    const src = URL.createObjectURL(blob);
-    objectUrls.current.add(src);
-    return { ...photo, src };
-  }
+  const refresh = useCallback(async () => {
+    const version = ++activeLoad.current;
+    try {
+      if (cloud) {
+        const result = await cloud.list();
+        if (mounted.current && version === activeLoad.current) {
+          setPersonalPhotos(newestFirst(result.photos));
+          setLoadError(result.incomplete ? 'Часть фото пока недоступна. Попробуйте обновить галерею.' : '');
+        }
+      } else {
+        const rows = await readLocalPhotos();
+        if (mounted.current && version === activeLoad.current) {
+          setPersonalPhotos(newestFirst(rows).map(({ blob, ...photo }) => {
+            if (!objectUrls.current.has(photo.id)) objectUrls.current.set(photo.id, URL.createObjectURL(blob));
+            return { ...photo, src: objectUrls.current.get(photo.id) };
+          }));
+          setLoadError('');
+        }
+      }
+    } catch {
+      if (mounted.current && version === activeLoad.current) setLoadError('Не удалось открыть сохранённые фотографии.');
+    } finally {
+      if (mounted.current && version === activeLoad.current) setLoading(false);
+    }
+  }, [cloud]);
 
   useEffect(() => {
-    current.current = true;
-    let cancelled = false;
-    async function load() {
-      try {
-        const rows = await photoTransaction('readonly', (store) => store.getAll());
-        if (!cancelled) {
-          rows.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
-          setPersonalPhotos(rows.map(createView));
-        }
-      } catch {
-        if (!cancelled) setNotice('Не удалось открыть сохранённые фотографии в этом браузере.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
+    mounted.current = true;
+    refresh();
+    const stopWatching = cloud ? watchAccountChanges(refresh) : null;
+    const urls = objectUrls.current;
     return () => {
-      cancelled = true;
-      current.current = false;
-      objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      objectUrls.current.clear();
+      mounted.current = false;
+      activeLoad.current += 1;
+      stopWatching?.();
+      urls.forEach((url) => URL.revokeObjectURL(url));
+      urls.clear();
     };
-  }, []);
+  }, [cloud, refresh]);
+
+  async function saveRows(rows) {
+    if (!rows.length) return { ids: [], failed: 0 };
+    if (!cloud) {
+      await photoTransaction('readwrite', (store) => { rows.forEach((row) => store.add(row)); });
+      return { ids: rows.map(({ id }) => id), failed: 0 };
+    }
+    const ids = [];
+    let failed = 0;
+    for (const row of rows) {
+      if (!mounted.current) break;
+      try { ids.push(await cloud.save(row)); } catch { failed += 1; }
+    }
+    return { ids, failed };
+  }
 
   async function addPhotos(files) {
-    if (!files.length || loading || importing) return false;
+    if (!files.length || loading || working.current) return false;
+    working.current = true;
     setImporting(true);
     setNotice('');
     const rows = [];
@@ -109,26 +146,44 @@ export function usePersonalPhotos() {
 
     try {
       for (const file of files) {
-        try { rows.push(await preparePhoto(file)); }
-        catch { unavailable += 1; }
+        if (!mounted.current) return false;
+        try { rows.push(await preparePhoto(file)); } catch { unavailable += 1; }
       }
       if (!rows.length) {
-        if (current.current) setNotice('Не удалось открыть выбранные файлы. Попробуйте JPEG, PNG или WebP.');
+        if (mounted.current) setNotice('Не удалось открыть выбранные файлы. Попробуйте JPEG, PNG или WebP.');
         return false;
       }
-      await photoTransaction('readwrite', (store) => { rows.forEach((row) => store.add(row)); });
-      if (!current.current) return false;
-      const saved = rows.map(createView);
-      setPersonalPhotos((photos) => [...saved, ...photos]);
-      setNotice(unavailable ? `Сохранено фото: ${saved.length}. Не удалось открыть: ${unavailable}.` : `Сохранено фото: ${saved.length}.`);
-      return true;
+      const { ids, failed } = await saveRows(rows);
+      if (!mounted.current) return false;
+      if (ids.length) await refresh();
+      if (mounted.current) {
+        const missing = unavailable + failed;
+        setNotice(missing ? `Сохранено фото: ${ids.length}. Не удалось добавить: ${missing}.` : `Сохранено фото: ${ids.length}.`);
+      }
+      return ids.length > 0;
     } catch {
-      if (current.current) setNotice('Не удалось сохранить фотографии. Возможно, в браузере закончилось место.');
+      if (mounted.current) setNotice('Не удалось сохранить фотографии. Попробуйте ещё раз.');
       return false;
     } finally {
-      if (current.current) setImporting(false);
+      working.current = false;
+      if (mounted.current) setImporting(false);
     }
   }
 
-  return { personalPhotos, loading, importing, notice, addPhotos };
+  async function importLocalPhotos() {
+    if (!cloud || working.current) return null;
+    working.current = true;
+    setImporting(true);
+    try {
+      const rows = await readLocalPhotos();
+      const result = await saveRows(rows);
+      if (result.ids.length && mounted.current) await refresh();
+      return result;
+    } finally {
+      working.current = false;
+      if (mounted.current) setImporting(false);
+    }
+  }
+
+  return { personalPhotos, loading, importing, notice, loadError, refresh, addPhotos, importLocalPhotos };
 }

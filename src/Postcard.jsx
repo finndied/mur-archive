@@ -145,22 +145,22 @@ function drawPostcard(canvas, { image, focus, theme, seal, caption }) {
   ctx.fillText('ИЗ МУР.АРХИВА', 85, 1281);
 }
 
-export default function Postcard({ photos, photo, onSelect }) {
-  const [theme, setTheme] = useState(themes[0]);
-  const [seal, setSeal] = useState('paw');
-  const [caption, setCaption] = useState('Привет от Джузо и Моти!');
+export default function Postcard({ photos, photo, draft, onChange, onCommit, ready, syncError }) {
+  const theme = themes.find(({ id }) => id === draft.theme) ?? themes[0];
+  const { seal, caption } = draft;
   const [loaded, setLoaded] = useState(null);
   const [fontReady, setFontReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const canvas = useRef(null);
   const film = useRef(null);
-  const image = loaded?.id === photo.id ? loaded.image : null;
+  const image = loaded?.src === photo.src ? loaded.image : null;
 
   useEffect(() => {
     const picture = new Image();
-    picture.onload = () => setLoaded({ id: photo.id, image: picture });
-    picture.onerror = () => setLoaded({ id: photo.id, image: null });
+    picture.crossOrigin = 'anonymous';
+    picture.onload = () => setLoaded({ src: photo.src, image: picture });
+    picture.onerror = () => setLoaded({ src: photo.src, image: null });
     picture.src = photo.src;
     return () => { picture.onload = null; picture.onerror = null; };
   }, [photo.id, photo.src]);
@@ -210,7 +210,7 @@ export default function Postcard({ photos, photo, onSelect }) {
     }, 'image/png');
   }
 
-  const imageFailed = loaded?.id === photo.id && !image;
+  const imageFailed = loaded?.src === photo.src && !image;
   return (
     <section className="postcard shell" id="postcard" aria-labelledby="postcard-title">
       <header className="postcard-header">
@@ -225,11 +225,11 @@ export default function Postcard({ photos, photo, onSelect }) {
       </div>
 
       <div className="postcard-editor">
-        <fieldset className="postcard-field">
+        <fieldset className="postcard-field" disabled={!ready}>
           <legend>Кадр</legend>
           <div className="postcard-film" ref={film}>
             {photos.map((item) => (
-              <button type="button" key={item.id} aria-label={item.title} aria-pressed={photo.id === item.id} onClick={() => onSelect(item.id)}>
+              <button type="button" key={item.id} aria-label={item.title} aria-pressed={photo.id === item.id} onClick={() => onChange('photoId', item.id)}>
                 <img src={item.src} alt="" width="72" height="72" loading="lazy" style={{ objectPosition: item.focus }} />
               </button>
             ))}
@@ -237,26 +237,27 @@ export default function Postcard({ photos, photo, onSelect }) {
         </fieldset>
         <label className="postcard-field postcard-caption">
           <span>Подпись</span>
-          <input type="text" maxLength={42} value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="Ваши слова" />
+          <input type="text" maxLength={42} value={caption} disabled={!ready} onChange={(event) => onChange('caption', event.target.value)} onBlur={onCommit} placeholder="Ваши слова" />
         </label>
         <div className="postcard-options">
-          <fieldset className="postcard-field">
+          <fieldset className="postcard-field" disabled={!ready}>
             <legend>Бумага</legend>
             <div className="postcard-swatches">
-              {themes.map((item) => <button type="button" key={item.id} aria-label={item.label} title={item.label} aria-pressed={theme.id === item.id} onClick={() => setTheme(item)} style={{ '--swatch': item.paper }} />)}
+              {themes.map((item) => <button type="button" key={item.id} aria-label={item.label} title={item.label} aria-pressed={theme.id === item.id} onClick={() => onChange('theme', item.id)} style={{ '--swatch': item.paper }} />)}
             </div>
           </fieldset>
-          <fieldset className="postcard-field">
+          <fieldset className="postcard-field" disabled={!ready}>
             <legend>Стикер</legend>
             <div className="postcard-seals">
-              {seals.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-label={label} title={label} aria-pressed={seal === id} onClick={() => setSeal(id)}><Icon size={18} /></button>)}
+              {seals.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-label={label} title={label} aria-pressed={seal === id} onClick={() => onChange('seal', id)}><Icon size={18} /></button>)}
             </div>
           </fieldset>
         </div>
         <div className="postcard-export">
-          <button type="button" className="postcard-download" onClick={download} disabled={!image || saving}><Download size={18} /> {saving ? 'Сохраняем…' : 'Скачать PNG'}</button>
+          <button type="button" className="postcard-download" onClick={download} disabled={!image || saving || !ready}><Download size={18} /> {saving ? 'Сохраняем…' : 'Скачать PNG'}</button>
           <p className="postcard-feedback" role="status">{feedback}</p>
         </div>
+        {syncError && <p className="postcard-feedback" role="status">{syncError}</p>}
       </div>
     </section>
   );

@@ -12,6 +12,7 @@
   "dependencies": {
     "@fontsource-variable/manrope": "5.2.8",
     "@fontsource-variable/unbounded": "5.2.8",
+    "@supabase/supabase-js": "^2",
     "lucide-react": "0.468.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",

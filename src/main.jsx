@@ -1,14 +1,18 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Cat, ChevronLeft, ChevronRight, Expand, Focus, Hand, Heart,
-  ImagePlus, Images, PawPrint, RotateCcw, Shuffle, Sparkles, Stamp, X,
+  ImagePlus, Images, PawPrint, RotateCcw, Shuffle, Sparkles, Stamp, UserRound, X,
 } from 'lucide-react';
 import '@fontsource-variable/manrope';
 import '@fontsource-variable/unbounded';
 import './styles.css';
+import AccountDialog from './AccountDialog.jsx';
 import Postcard from './Postcard.jsx';
 import { usePersonalPhotos } from './personalPhotos.js';
+import { readGuestFavorites, useArchivePreferences } from './archivePreferences.js';
+import { createPhotoStore } from './photoStore.js';
+import { supabase } from './supabase.js';
 
 const CatScene = lazy(() => import('./CatScene.jsx'));
 
@@ -27,33 +31,16 @@ const filters = [
   { id: 'solo', label: 'По одному' },
   { id: 'custom', label: 'Мои фото' },
 ];
-const favoriteKey = 'mur-archive:favorites';
-const postcardKey = 'mur-archive:postcard-photo';
-
-function readFavorites() {
-  try {
-    const value = JSON.parse(localStorage.getItem(favoriteKey));
-    return Array.isArray(value) ? [...new Set(value.filter((id) => typeof id === 'string'))] : [];
-  } catch {
-    return [];
-  }
-}
-
-function readPostcardPhoto() {
-  try { return localStorage.getItem(postcardKey) || photos[0].id; }
-  catch { return photos[0].id; }
-}
-
-function FavoriteButton({ photo, favorites, onToggle }) {
+function FavoriteButton({ photo, favorites, onToggle, disabled }) {
   const active = favorites.includes(photo.id);
   return (
-    <button type="button" className="favorite-button" aria-label={`${active ? 'Убрать из избранного' : 'В избранное'} — ${photo.title}`} aria-pressed={active} onClick={() => onToggle(photo.id)}>
+    <button type="button" className="favorite-button" aria-label={`${active ? 'Убрать из избранного' : 'В избранное'} — ${photo.title}`} aria-pressed={active} disabled={disabled} onClick={() => onToggle(photo.id)}>
       <Heart size={19} strokeWidth={2} fill={active ? 'currentColor' : 'none'} />
     </button>
   );
 }
 
-function Lightbox({ list, active, favorites, onChange, onClose, onToggle, onPostcard }) {
+function Lightbox({ list, active, favorites, favoritesReady, onChange, onClose, onToggle, onPostcard }) {
   const dialog = useRef(null);
   const swipe = useRef(null);
   const current = list.findIndex((photo) => photo.id === active);
@@ -113,7 +100,7 @@ function Lightbox({ list, active, favorites, onChange, onClose, onToggle, onPost
             <span>{current + 1} / {list.length}</span>
           </div>
           <button type="button" className="lightbox-nav" onClick={() => step(1)} disabled={list.length < 2} aria-label="Следующее фото"><ChevronRight /></button>
-          <FavoriteButton photo={photo} favorites={favorites} onToggle={onToggle} />
+          <FavoriteButton photo={photo} favorites={favorites} onToggle={onToggle} disabled={!favoritesReady} />
         </div>
         <button type="button" className="lightbox-postcard" onClick={() => onPostcard(photo.id)}><Stamp size={17} /> Сделать открытку</button>
       </div>
@@ -200,13 +187,17 @@ function Studio() {
   );
 }
 
-function App() {
-  const [favorites, setFavorites] = useState(readFavorites);
+function Archive({ user, authError }) {
+  const userId = user?.id;
+  const cloud = useMemo(() => userId ? createPhotoStore(supabase, userId) : null, [userId]);
+  const gallery = usePersonalPhotos(cloud);
+  const preferences = useArchivePreferences(supabase, userId);
+  const { personalPhotos, loading, importing, notice, addPhotos } = gallery;
+  const { favorites, favoritesReady, draft, changeDraft, toggleFavorite } = preferences;
   const [filter, setFilter] = useState('all');
   const [active, setActive] = useState(null);
   const [viewerList, setViewerList] = useState([]);
-  const [postcardPhoto, setPostcardPhoto] = useState(readPostcardPhoto);
-  const { personalPhotos, loading, importing, notice, addPhotos } = usePersonalPhotos();
+  const [accountOpen, setAccountOpen] = useState(Boolean(authError));
   const opener = useRef(null);
   const lastViewed = useRef(null);
   const filePicker = useRef(null);
@@ -214,22 +205,33 @@ function App() {
   const allPhotos = [...photos, ...personalPhotos];
   const visible = allPhotos.filter((photo) => filter === 'all' || photo.kind === filter || (filter === 'favorites' && favorites.includes(photo.id)));
   const favoriteCount = allPhotos.filter((photo) => favorites.includes(photo.id)).length;
-  const postcardSelection = allPhotos.find(({ id }) => id === postcardPhoto) ?? photos[0];
-
-  useEffect(() => {
-    try { localStorage.setItem(favoriteKey, JSON.stringify(favorites)); } catch { /* The gallery works without storage. */ }
-  }, [favorites]);
-
-  useEffect(() => {
-    try { localStorage.setItem(postcardKey, postcardPhoto); } catch { /* The editor can still use the current selection. */ }
-  }, [postcardPhoto]);
+  const postcardSelection = allPhotos.find(({ id }) => id === draft.photoId) ?? photos[0];
+  const currentViewer = viewerList.map((item) => allPhotos.find(({ id }) => id === item.id) ?? item);
 
   useEffect(() => {
     document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: 'instant' });
   }, []);
 
-  function toggleFavorite(id) {
-    setFavorites((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id]);
+  async function importFromBrowser() {
+    const result = await gallery.importLocalPhotos();
+    if (!result) return 'Дождись завершения загрузки фотографий.';
+    const available = new Set([...allPhotos.map(({ id }) => id), ...result.ids]);
+    const localFavorites = readGuestFavorites().filter((id) => available.has(id));
+    try {
+      await preferences.mergeFavorites(localFavorites);
+    } catch {
+      return `Фото в аккаунте: ${result.ids.length}. Не удалось перенести избранное. Перенос можно повторить.`;
+    }
+    if (result.ids.length || localFavorites.length) {
+      return `Фото в аккаунте: ${result.ids.length}. Снимки из избранного: ${localFavorites.length}.${result.failed ? ` Не удалось перенести фото: ${result.failed}.` : ''}`;
+    }
+    return result.failed ? 'Не удалось перенести фото. Попробуй ещё раз.' : 'В этом браузере нет фото и избранного для переноса.';
+  }
+
+  async function signOut() {
+    await preferences.flushDraft();
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) throw error;
   }
 
   function showPhoto(id) {
@@ -265,7 +267,7 @@ function App() {
   }
 
   function makePostcard(id) {
-    setPostcardPhoto(id);
+    changeDraft('photoId', id);
     setActive(null);
     requestAnimationFrame(() => {
       if (window.location.hash !== '#postcard') window.history.pushState(null, '', '#postcard');
@@ -283,9 +285,14 @@ function App() {
           <a className="postcard-nav" href="#postcard">Мур.почта</a>
           <a className="studio-link" href="#studio" aria-label="3D-мастерская"><span className="studio-link-full">3D-мастерская</span><span className="studio-link-short" aria-hidden="true">3D</span></a>
         </nav>
-        <a className="favorites-link" id="favorites-link" href="#gallery" onClick={() => setFilter(filter === 'favorites' ? 'all' : 'favorites')} aria-current={filter === 'favorites' ? 'true' : undefined} aria-label={`Избранное, фото: ${favoriteCount}`}>
-          <Heart size={19} fill={filter === 'favorites' ? 'currentColor' : 'none'} /><span>Избранное</span>{favoriteCount > 0 && <b>{favoriteCount}</b>}
-        </a>
+        <div className="header-actions">
+          <a className="favorites-link" id="favorites-link" href="#gallery" onClick={() => setFilter(filter === 'favorites' ? 'all' : 'favorites')} aria-current={filter === 'favorites' ? 'true' : undefined} aria-label={`Избранное, фото: ${favoriteCount}`}>
+            <Heart size={19} fill={filter === 'favorites' ? 'currentColor' : 'none'} /><span>Избранное</span>{favoriteCount > 0 && <b>{favoriteCount}</b>}
+          </a>
+          <button type="button" className="account-toggle" onClick={() => setAccountOpen(true)} aria-haspopup="dialog" aria-label={user ? 'Аккаунт' : 'Войти'}>
+            <UserRound size={18} /><span>{user ? 'Аккаунт' : 'Войти'}</span>
+          </button>
+        </div>
       </header>
       <main>
         <Hero onBrowse={() => setFilter('all')} onOpen={(event) => openPhoto(photos[0].id, event, allPhotos)} />
@@ -305,6 +312,10 @@ function App() {
             </div>
           </div>
           <div className="upload-status" role="status">{notice}</div>
+          {(gallery.loadError || preferences.loadError || preferences.favoriteError) && <div className="sync-message" role="status">
+            <span>{[gallery.loadError, preferences.loadError, preferences.favoriteError].filter(Boolean).join(' ')}</span>
+            {(gallery.loadError || preferences.loadError) && <button type="button" onClick={() => { gallery.refresh(); preferences.refresh(); }}>Обновить</button>}
+          </div>}
           {visible.length ? <div className="gallery-grid">
             {visible.map((photo) => (
               <article className="photo-card" key={photo.id}>
@@ -313,7 +324,7 @@ function App() {
                     <img src={photo.src} alt={photo.alt} style={{ objectPosition: photo.focus }} loading="lazy" width={photo.width} height={photo.height} />
                     <span className="expand" aria-hidden="true"><Expand size={17} /></span>
                   </button>
-                  <FavoriteButton photo={photo} favorites={favorites} onToggle={toggleFavorite} />
+                  <FavoriteButton photo={photo} favorites={favorites} onToggle={toggleFavorite} disabled={!favoritesReady} />
                 </div>
                 <h3>{photo.title}</h3>
               </article>
@@ -321,16 +332,49 @@ function App() {
           </div> : filter === 'custom' ? <div className="empty"><ImagePlus size={25} /><p>{loading ? 'Открываем сохранённые фото…' : 'Добавьте свои снимки, чтобы использовать их в фотобудке.'}</p></div>
             : <div className="empty"><Heart size={25} /><p>Нажмите сердечко на фото, чтобы сохранить его здесь.</p><button type="button" onClick={() => setFilter('all')}>Все фотографии</button></div>}
         </section>
-        <Postcard photos={allPhotos} photo={postcardSelection} onSelect={setPostcardPhoto} />
+        <Postcard photos={allPhotos} photo={postcardSelection} draft={draft} onChange={changeDraft} onCommit={preferences.flushDraft} ready={preferences.draftReady} syncError={preferences.draftError} />
         <Studio />
       </main>
       <footer className="site-footer shell">
         <a className="brand" href="#top"><span className="brand-icon"><PawPrint size={20} /></span>Мур<span className="brand-dot">.</span>архив</a>
         <a className="back-top" href="#top">Наверх</a>
       </footer>
-      {active && <Lightbox list={viewerList} active={active} favorites={favorites} onChange={showPhoto} onClose={closePhoto} onToggle={toggleFavorite} onPostcard={makePostcard} />}
+      {active && <Lightbox list={currentViewer} active={active} favorites={favorites} favoritesReady={favoritesReady} onChange={showPhoto} onClose={closePhoto} onToggle={toggleFavorite} onPostcard={makePostcard} />}
+      {accountOpen && <AccountDialog client={supabase} user={user} initialNotice={authError} onClose={() => setAccountOpen(false)} onImport={importFromBrowser} onSignOut={signOut} uploadBusy={importing} />}
     </>
   );
+}
+
+function App() {
+  const [session, setSession] = useState(null);
+  const [ready, setReady] = useState(!supabase);
+  const [authError, setAuthError] = useState('');
+
+  useEffect(() => {
+    if (!supabase) return;
+    const callback = new URL(window.location.href);
+    const hash = new URLSearchParams(callback.hash.slice(1));
+    if (callback.searchParams.has('error_code') || hash.has('error_code')) {
+      setAuthError('Ссылка для входа недействительна или устарела. Запроси новую.');
+      for (const key of ['error', 'error_code', 'error_description']) callback.searchParams.delete(key);
+      if (hash.has('error_code')) callback.hash = '';
+      window.history.replaceState(window.history.state, '', callback);
+    }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, current) => {
+      setSession(current);
+      if (current) setAuthError('');
+      if (event === 'INITIAL_SESSION' && !current && callback.searchParams.has('code')) {
+        setAuthError('Открой ссылку в браузере, где ты её запросил. Если срок истёк, запроси новую.');
+        callback.searchParams.delete('code');
+        window.history.replaceState(window.history.state, '', callback);
+      }
+      setReady(true);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (!ready) return <p className="shell account-loading" role="status">Открываем Мур.архив…</p>;
+  return <Archive key={session?.user.id ?? 'guest'} user={session?.user} authError={authError} />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

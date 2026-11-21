@@ -88,3 +88,7 @@
 @media (max-width: 359px) {
   .site-header .site-nav { display: none; }
 }
+
+.account-switches { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 14px; }
+.account-switches button { min-height: 37px; padding: 3px 0; border: 0; background: transparent; color: var(--violet); text-decoration: underline; text-underline-offset: 3px; font-weight: 800; font-size: .88rem; }
+.account-switches button:hover { color: var(--ink); }
